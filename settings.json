@@ -2,5 +2,5 @@
     "name": "dataset-collector",
     "rest": false,
     "cli": false,
-    "data-pickup-period": 5
+    "data-pickup-period": 3
 }

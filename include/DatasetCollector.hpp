@@ -19,7 +19,7 @@ class DatasetCollector : public Application
     SIMPLE_APPLICATION(DatasetCollector, "dataset-collector")
 public:
     void init(Loader* loader, const Config& config) override;
-    void startUpInactive(Loader* loader);
+    void CollectFlowsInfo(int iter_num);
 
 private:
     OFMessageHandlerPtr handler_;
