@@ -8,6 +8,9 @@
 #include "api/SwitchFwd.hpp"
 #include "oxm/openflow_basic.hh"
 
+#include <fstream>
+#include <unordered_map>
+
 namespace runos {
 
 using SwitchPtr = safe::shared_ptr<Switch>;
@@ -19,7 +22,7 @@ class DatasetCollector : public Application
     SIMPLE_APPLICATION(DatasetCollector, "dataset-collector")
 public:
     void init(Loader* loader, const Config& config) override;
-    void CollectFlowsInfo(int iter_num);
+    void CollectFlowsInfo(int iter_num, std::ofstream& file);
 
 private:
     OFMessageHandlerPtr handler_;
@@ -27,7 +30,11 @@ private:
     OFServer* of_server_;
 	
     boost::chrono::seconds data_pickup_period_;
-    boost::thread data_pickup_thread_;
+    
+    std::unordered_map<uint64_t, long long> packets_in_flow_;
+    std::unordered_map<uint64_t, long long> packets_in_removed_flow_;
+    long long flows_removed = 0;
+    long long flows_num = 0;
 };
 
 } // namespace runos
