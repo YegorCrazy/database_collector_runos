@@ -21,36 +21,51 @@ REGISTER_APPLICATION(DatasetCollector, {"controller",
                                 "command-line",
                                 ""})
                                 
+struct DatasetCollector::FlowRemovedHandler final
+    : OFMessageHandler<of13::FlowRemoved> {
+        
+    DatasetCollector* app_;
+    
+    explicit FlowRemovedHandler(DatasetCollector* app) : app_{app} {}
+    
+    bool process(of13::FlowRemoved& fr, OFConnectionPtr conn) override {
+        app_->flows_removed += 1;
+        VLOG(6) << "Flow " << fr.cookie() << " removed, count is " << app_->flows_removed;
+        
+        app_->packets_in_removed_flow_[fr.cookie()] = fr.packet_count();
+
+        return false;
+    }
+};
+
+DatasetCollector::~DatasetCollector() = default;
+                                
 void DatasetCollector::init(Loader* loader, const Config& config) {
     switch_manager_ = SwitchManager::get(loader);
     of_server_ = OFServer::get(loader);
     CommandLine* cli = CommandLine::get(loader);
+    
     // registering command: collect dataset n filename.csv
     // adding n rows to file "filename.csv"
     cli->register_command(
-        cli_pattern(R"(collect\s+dataset\s+([0-9]+)\s+(.+\.csv))"),
+        cli_pattern(R"(collect\s+dataset\s+([0-9]+)\s+(.+\.csv)\s+([0-9]+))"),
         [=](cli_match const& match) {
             std::ofstream file;
             file.open(match[2], std::ios::app);
-            this->CollectFlowsInfo(std::stoi(match[1]), file);
+            this->CollectFlowsInfo(std::stoi(match[1]), file, std::stoi(match[3]));
             file.close();
         });
     data_pickup_period_ = boost::chrono::seconds(config_get(
         config_cd(config, "dataset-collector"), "data-pickup-period", 3));
-        
-    handler_ = Controller::get(loader)->register_handler(
-    [=](of13::PacketIn& fr, OFConnectionPtr ofconn) mutable -> bool
-    {
-        flows_removed += 1;
-        LOG(INFO) << "Flow " << fr.cookie() << " removed, count is " << flows_removed;
-        
-        packets_in_removed_flow_[fr.cookie()] = fr.packet_count();
-
-        return false;
-    }, -4);
+    
+    handler_.reset(new FlowRemovedHandler(this));
+    Controller::get(loader)->register_handler(handler_, -200);
 }
 
-void DatasetCollector::CollectFlowsInfo(int iter_num, std::ofstream& file) {
+void DatasetCollector::CollectFlowsInfo(int iter_num, std::ofstream& file, int label) {
+    flows_removed = 0;
+    long long flows_num = 0;
+    std::unordered_map<uint64_t, long long> packets_in_flow;
     for (int i = 0; i < iter_num; ++i) {
         // truly there is must be only one switch
         for (auto switch_ptr : switch_manager_->switches()) {
@@ -81,21 +96,21 @@ void DatasetCollector::CollectFlowsInfo(int iter_num, std::ofstream& file) {
             std::unordered_map<uint64_t, long long> new_packets_in_flows;
             for (auto flow_stat : response) {
                 auto cookie = flow_stat.cookie();
-                if (packets_in_flow_.find(cookie) != packets_in_flow_.end()) {
-                    auto new_packets = flow_stat.packet_count() - packets_in_flow_[cookie];
+                if (packets_in_flow.find(cookie) != packets_in_flow.end()) {
+                    auto new_packets = flow_stat.packet_count() - packets_in_flow[cookie];
                     sum_packet_count += new_packets;
                     new_packets_in_flows[cookie] = new_packets;
                 } else {
                     sum_packet_count += flow_stat.packet_count();
                     new_packets_in_flows[cookie] = flow_stat.packet_count();
                 }
-                packets_in_flow_[cookie] = flow_stat.packet_count();
+                packets_in_flow[cookie] = flow_stat.packet_count();
             }
             for (auto [cookie, packets_num] : packets_in_removed_flow_) {
                 long long new_packets;
-                if (packets_in_flow_.find(cookie) != packets_in_flow_.end()) {
-                    new_packets = packets_num - packets_in_flow_[cookie];
-                    packets_in_flow_.erase(cookie);
+                if (packets_in_flow.find(cookie) != packets_in_flow.end()) {
+                    new_packets = packets_num - packets_in_flow[cookie];
+                    packets_in_flow.erase(cookie);
                 } else {
                     new_packets = packets_num;
                 }
@@ -115,10 +130,11 @@ void DatasetCollector::CollectFlowsInfo(int iter_num, std::ofstream& file) {
             
             file << FlowCount << "," << SpeedOfFlowEntries << "," 
                  << AverageNumberOfFlowPackets << "," 
-                 << VariationNumberOfFlowPackets << std::endl;
+                 << VariationNumberOfFlowPackets;
         }
         packets_in_removed_flow_.clear();
         flows_removed = 0;
+        file << "," << label << std::endl;
         
         boost::this_thread::sleep_for(data_pickup_period_);
     }

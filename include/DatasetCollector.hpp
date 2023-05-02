@@ -22,19 +22,19 @@ class DatasetCollector : public Application
     SIMPLE_APPLICATION(DatasetCollector, "dataset-collector")
 public:
     void init(Loader* loader, const Config& config) override;
-    void CollectFlowsInfo(int iter_num, std::ofstream& file);
+    void CollectFlowsInfo(int iter_num, std::ofstream& file, int label);
+    ~DatasetCollector();
 
 private:
-    OFMessageHandlerPtr handler_;
+    struct FlowRemovedHandler;
+    std::shared_ptr<FlowRemovedHandler> handler_;
     SwitchManager* switch_manager_;
     OFServer* of_server_;
 	
     boost::chrono::seconds data_pickup_period_;
     
-    std::unordered_map<uint64_t, long long> packets_in_flow_;
     std::unordered_map<uint64_t, long long> packets_in_removed_flow_;
     long long flows_removed = 0;
-    long long flows_num = 0;
 };
 
 } // namespace runos
