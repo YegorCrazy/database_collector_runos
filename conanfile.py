@@ -1,10 +1,10 @@
 from conans import ConanFile, tools
 
-class DDoSDetectorConan(ConanFile):
-    name = "DDoSDetector"
+class DatasetCollectorConan(ConanFile):
+    name = "DatasetCollector"
     version = "0.1"
     settings = None
-    description = "DDoS Detector"
+    description = "Dataset collector"
     url = "None"
     license = "None"
     author = "None"

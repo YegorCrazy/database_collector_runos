@@ -1,7 +1,6 @@
 {
-    "name": "ddos-detector",
+    "name": "dataset-collector",
     "rest": false,
     "cli": false,
-    "data-pickup-period": 3,
-    "weights_file": "weights"
+    "data-pickup-period": 3
 }
