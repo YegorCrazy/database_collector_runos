@@ -30,7 +30,6 @@ struct DatasetCollector::FlowRemovedHandler final
     
     bool process(of13::FlowRemoved& fr, OFConnectionPtr conn) override {
         app_->flows_removed += 1;
-        VLOG(6) << "Flow " << fr.cookie() << " removed, count is " << app_->flows_removed;
         
         app_->packets_in_removed_flow_[fr.cookie()] = fr.packet_count();
 
@@ -67,7 +66,7 @@ void DatasetCollector::CollectFlowsInfo(int iter_num, std::ofstream& file, int l
     long long flows_num = 0;
     std::unordered_map<uint64_t, long long> packets_in_flow;
     for (int i = 0; i < iter_num; ++i) {
-        // truly there is must be only one switch
+        std::vector<of13::FlowStats> flows;
         for (auto switch_ptr : switch_manager_->switches()) {
             auto dpid = switch_ptr->dpid();
             auto of_agent_future = of_server_->agent(dpid);
@@ -77,61 +76,69 @@ void DatasetCollector::CollectFlowsInfo(int iter_num, std::ofstream& file, int l
             ofp::flow_stats_request req;
             req.out_port = of13::OFPP_ANY;
             req.out_group = of13::OFPG_ANY;
-            req.cookie = 1;
+            req.cookie = (1 << 16) | 1;
             req.cookie_mask = 0x00000000FFFFFFFFULL;
             
             auto response_future = of_agent->request_flow_stats(req);
             response_future.wait();
             auto response = response_future.get();
-            
-            auto FlowCount = response.size();
-            if (FlowCount == 0) {
-                continue;
+
+            for (const auto& flow : response) {
+                flows.push_back(flow);
             }
+        }
             
-            long long SpeedOfFlowEntries = FlowCount - flows_num + flows_removed;
-            flows_num = FlowCount;
-            
-            long long sum_packet_count = 0;
-            std::unordered_map<uint64_t, long long> new_packets_in_flows;
-            for (auto flow_stat : response) {
-                auto cookie = flow_stat.cookie();
-                if (packets_in_flow.find(cookie) != packets_in_flow.end()) {
-                    auto new_packets = flow_stat.packet_count() - packets_in_flow[cookie];
-                    sum_packet_count += new_packets;
-                    new_packets_in_flows[cookie] = new_packets;
-                } else {
-                    sum_packet_count += flow_stat.packet_count();
-                    new_packets_in_flows[cookie] = flow_stat.packet_count();
-                }
-                packets_in_flow[cookie] = flow_stat.packet_count();
-            }
-            for (auto [cookie, packets_num] : packets_in_removed_flow_) {
-                long long new_packets;
-                if (packets_in_flow.find(cookie) != packets_in_flow.end()) {
-                    new_packets = packets_num - packets_in_flow[cookie];
-                    packets_in_flow.erase(cookie);
-                } else {
-                    new_packets = packets_num;
-                }
+        auto FlowCount = flows.size();
+        if (FlowCount == 0 && flows_removed == 0) {
+            packets_in_removed_flow_.clear();
+            file << "," << label << std::endl;
+            boost::this_thread::sleep_for(data_pickup_period_);
+            continue;
+        }
+        
+        long long SpeedOfFlowEntries = FlowCount - flows_num + flows_removed;
+        flows_num = FlowCount;
+        
+        long long sum_packet_count = 0;
+        std::unordered_map<uint64_t, long long> new_packets_in_flows;
+        for (auto flow_stat : flows) {
+            auto cookie = flow_stat.cookie();
+            if (packets_in_flow.find(cookie) != packets_in_flow.end()) {
+                auto new_packets = flow_stat.packet_count() - packets_in_flow[cookie];
                 sum_packet_count += new_packets;
                 new_packets_in_flows[cookie] = new_packets;
+            } else {
+                sum_packet_count += flow_stat.packet_count();
+                new_packets_in_flows[cookie] = flow_stat.packet_count();
             }
-            long long flows_total = FlowCount + packets_in_removed_flow_.size();
-            long double AverageNumberOfFlowPackets = double(sum_packet_count) / flows_total;
-            
-            long double VariationNumberOfFlowPackets = 0;
-            for (auto [_, packets_num] : new_packets_in_flows) {
-                VariationNumberOfFlowPackets += std::pow(
-                    packets_num - AverageNumberOfFlowPackets,
-                    2);
-            }
-            VariationNumberOfFlowPackets = std::sqrt(VariationNumberOfFlowPackets / flows_total);
-            
-            file << FlowCount << "," << SpeedOfFlowEntries << "," 
-                 << AverageNumberOfFlowPackets << "," 
-                 << VariationNumberOfFlowPackets;
+            packets_in_flow[cookie] = flow_stat.packet_count();
         }
+        for (auto [cookie, packets_num] : packets_in_removed_flow_) {
+            long long new_packets;
+            if (packets_in_flow.find(cookie) != packets_in_flow.end()) {
+                new_packets = packets_num - packets_in_flow[cookie];
+                packets_in_flow.erase(cookie);
+            } else {
+                new_packets = packets_num;
+            }
+            sum_packet_count += new_packets;
+            new_packets_in_flows[cookie] = new_packets;
+        }
+        long long flows_total = FlowCount + packets_in_removed_flow_.size();
+        long double AverageNumberOfFlowPackets = double(sum_packet_count) / flows_total;
+        
+        long double VariationNumberOfFlowPackets = 0;
+        for (auto [_, packets_num] : new_packets_in_flows) {
+            VariationNumberOfFlowPackets += std::pow(
+                packets_num - AverageNumberOfFlowPackets,
+                2);
+        }
+        VariationNumberOfFlowPackets = std::sqrt(VariationNumberOfFlowPackets / flows_total);
+        
+        file << FlowCount << "," << SpeedOfFlowEntries << "," 
+                << AverageNumberOfFlowPackets << "," 
+                << VariationNumberOfFlowPackets;
+        
         packets_in_removed_flow_.clear();
         flows_removed = 0;
         file << "," << label << std::endl;
